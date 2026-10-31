@@ -30,6 +30,7 @@ class FakeWebglAddon {
 }
 
 class FakeTerminal {
+  static instances: FakeTerminal[] = [];
   options: Record<string, unknown>;
   rows = 24;
   cols = 80;
@@ -40,6 +41,7 @@ class FakeTerminal {
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
+    FakeTerminal.instances.push(this);
   }
 
   attachCustomKeyEventHandler() {
@@ -214,6 +216,7 @@ async function render(ui: ReactNode) {
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  FakeTerminal.instances = [];
   webglInstances.length = 0;
   maybeReloadForLoopbackWsAuthFailure.mockClear();
   apiMocks.buildWsUrl.mockReset();
@@ -279,6 +282,44 @@ afterEach(async () => {
 });
 
 describe("ChatPage", () => {
+  // Soft keyboards deliver text as an `input` event (inputType insertText),
+  // and xterm's Terminal._inputEvent — the only handler for that path —
+  // returns early when screenReaderMode is on. Forcing it on left tablets
+  // with a visible on-screen keyboard that typed nothing.
+  it("turns off xterm screenReaderMode on coarse-pointer (tablet) clients", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      addEventListener() {},
+      matches: query.includes("any-pointer: coarse"),
+      media: query,
+      removeEventListener() {},
+    }));
+    const { default: ChatPage } = await import("./ChatPage");
+    await render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <ChatPage isActive />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(FakeTerminal.instances).not.toHaveLength(0);
+    expect(FakeTerminal.instances[0].options.screenReaderMode).toBe(false);
+  });
+
+  it("keeps xterm screenReaderMode on for fine-pointer (desktop) clients", async () => {
+    const { default: ChatPage } = await import("./ChatPage");
+    await render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <ChatPage isActive />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(FakeTerminal.instances).not.toHaveLength(0);
+    expect(FakeTerminal.instances[0].options.screenReaderMode).toBe(true);
+  });
+
   it("sends a PTY keepalive frame every 20 seconds while the socket is open", async () => {
     vi.useFakeTimers();
     try {
